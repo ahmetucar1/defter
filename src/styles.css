@@ -1291,6 +1291,36 @@ button.shipment-name-link {
     padding-left: 4px;
   }
 
+  .beekeeper-detail .form-modern {
+    padding: 10px;
+    border-radius: 12px;
+    gap: 10px;
+    box-shadow: none;
+  }
+
+  .beekeeper-detail .form-modern label {
+    font-size: 0.88rem;
+    gap: 4px;
+  }
+
+  .beekeeper-detail .form-modern input,
+  .beekeeper-detail .form-modern select,
+  .beekeeper-detail .form-modern textarea {
+    min-height: 40px;
+    padding: 8px 10px;
+    border-radius: 10px;
+  }
+
+  .beekeeper-detail .form-modern .inline-info {
+    font-size: 0.88rem;
+    padding: 6px 8px;
+    border-radius: 10px;
+  }
+
+  .beekeeper-detail .form-modern .form-actions {
+    gap: 8px;
+  }
+
   .factory-detail {
     margin-left: -10px;
     margin-right: -10px;
