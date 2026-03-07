@@ -16,7 +16,11 @@ export default function App() {
   const [beekeeperFocusId, setBeekeeperFocusId] = useState(null);
   const [factoryFocusId, setFactoryFocusId] = useState(null);
   const [factoryFocusShipmentId, setFactoryFocusShipmentId] = useState(null);
-  const allowedEmails = ["ucaraahmet@gmail.com", "siverekbub@gmail.com"];
+  const allowedEmails = [
+    "ucaraahmet@gmail.com",
+    "siverekbub@gmail.com",
+    "aliucrr1@gmail.com"
+  ];
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (currentUser) => {

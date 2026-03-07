@@ -19,6 +19,7 @@ import {
 import useProducts from "../hooks/useProducts";
 import { firebaseErrorMessage } from "../utils/firebaseError";
 import { normalizeTextTr, normalizeUnitTr, toTitleCaseTr } from "../utils/textFormat";
+import * as XLSX from "xlsx";
 
 const numberFormatter = new Intl.NumberFormat("tr-TR");
 
@@ -1823,6 +1824,10 @@ export default function BeekeeperLedger({
   const [error, setError] = useState("");
   const [search, setSearch] = useState("");
   const [showForm, setShowForm] = useState(false);
+  const [importing, setImporting] = useState(false);
+  const [importError, setImportError] = useState("");
+  const [importSummary, setImportSummary] = useState("");
+  const fileInputRef = useRef(null);
 
   useEffect(() => {
     const q = query(collection(db, "beekeepers"));
@@ -1879,6 +1884,130 @@ export default function BeekeeperLedger({
       setError(firebaseErrorMessage(err, "Arıcı kaydedilemedi."));
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleImportFile = async (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    setImportError("");
+    setImportSummary("");
+    try {
+      setImporting(true);
+      const buffer = await file.arrayBuffer();
+      const workbook = XLSX.read(buffer, { type: "array" });
+      const sheetName = workbook.SheetNames[0];
+      if (!sheetName) {
+        setImportError("Excel dosyası bulunamadı.");
+        return;
+      }
+      const sheet = workbook.Sheets[sheetName];
+      const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, blankrows: false });
+      if (!rows.length) {
+        setImportError("Dosyada veri bulunamadı.");
+        return;
+      }
+
+      const firstRow = rows[0] || [];
+      const firstCell = String(firstRow[0] ?? "").trim().toLowerCase();
+      const secondCell = String(firstRow[1] ?? "").trim().toLowerCase();
+      const hasHeader =
+        (!Number(firstRow[0]) &&
+          (firstCell.includes("no") ||
+            firstCell.includes("numara") ||
+            firstCell.includes("id"))) ||
+        secondCell.includes("isim") ||
+        secondCell.includes("ad");
+
+      const startIndex = hasHeader ? 1 : 0;
+      const existingNumbers = new Set(
+        beekeepers.map((beekeeper) => String(beekeeper.number ?? ""))
+      );
+      const existingNames = new Set(
+        beekeepers.map((beekeeper) => normalizeTextTr(beekeeper.name))
+      );
+      const seenNumbers = new Set();
+      const toInsert = [];
+      const skipped = { empty: 0, duplicate: 0, invalid: 0 };
+
+      for (let i = startIndex; i < rows.length; i += 1) {
+        const row = rows[i] || [];
+        const numberRaw = row[0];
+        const nameRaw = row[1];
+        if (numberRaw == null || nameRaw == null || String(nameRaw).trim() === "") {
+          skipped.empty += 1;
+          continue;
+        }
+        let numberValue = Number(numberRaw);
+        if (Number.isNaN(numberValue)) {
+          const digits = String(numberRaw).match(/\d+/g)?.join("");
+          numberValue = digits ? Number(digits) : Number.NaN;
+        }
+        if (!Number.isFinite(numberValue) || numberValue <= 0) {
+          skipped.invalid += 1;
+          continue;
+        }
+        const normalizedName = toTitleCaseTr(String(nameRaw));
+        const nameKey = normalizeTextTr(normalizedName);
+        const numberKey = String(numberValue);
+        if (
+          existingNumbers.has(numberKey) ||
+          existingNames.has(nameKey) ||
+          seenNumbers.has(numberKey)
+        ) {
+          skipped.duplicate += 1;
+          continue;
+        }
+        seenNumbers.add(numberKey);
+        toInsert.push({
+          number: numberValue,
+          name: normalizedName
+        });
+      }
+
+      if (toInsert.length === 0) {
+        setImportSummary("Eklenecek kayıt bulunamadı.");
+        return;
+      }
+
+      const confirmed = window.confirm(
+        `${toInsert.length} kayıt eklenecek. Devam edilsin mi?`
+      );
+      if (!confirmed) return;
+
+      let batch = writeBatch(db);
+      let count = 0;
+      for (const item of toInsert) {
+        const ref = doc(collection(db, "beekeepers"));
+        batch.set(ref, {
+          number: Number(item.number),
+          name: item.name,
+          note: "",
+          active: true,
+          createdAt: serverTimestamp()
+        });
+        count += 1;
+        if (count >= 450) {
+          await batch.commit();
+          batch = writeBatch(db);
+          count = 0;
+        }
+      }
+      if (count > 0) {
+        await batch.commit();
+      }
+
+      setImportSummary(
+        `${toInsert.length} kayıt eklendi. ` +
+          `Atlanan: ${skipped.duplicate} mükerrer, ` +
+          `${skipped.invalid} hatalı, ${skipped.empty} boş.`
+      );
+    } catch (err) {
+      console.error(err);
+      setImportError(firebaseErrorMessage(err, "Excel içe aktarılamadı."));
+    } finally {
+      setImporting(false);
+      event.target.value = "";
     }
   };
 
@@ -1977,26 +2106,45 @@ export default function BeekeeperLedger({
       <h2>Arıcı Defteri</h2>
       <p className="muted">Arıcı numarasına göre sıralanır.</p>
       {error ? <div className="error">{error}</div> : null}
+      {importError ? <div className="error">{importError}</div> : null}
+      {importSummary ? <p className="muted">{importSummary}</p> : null}
       <div className="ledger-grid">
         <div className="list-card">
           <div className="list-header">
             <h3>Arıcı Listesi</h3>
-            <button
-              type="button"
-              className="ghost"
-              onClick={() => {
-                if (showForm && !editingId) {
-                  setShowForm(false);
+            <div className="card-actions">
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept=".xlsx,.xls"
+                onChange={handleImportFile}
+                style={{ display: "none" }}
+              />
+              <button
+                type="button"
+                className="ghost"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={importing}
+              >
+                {importing ? "Aktarılıyor..." : "Excel İçe Aktar"}
+              </button>
+              <button
+                type="button"
+                className="ghost"
+                onClick={() => {
+                  if (showForm && !editingId) {
+                    setShowForm(false);
+                    setForm({ number: "", name: "", note: "" });
+                    return;
+                  }
+                  setEditingId(null);
                   setForm({ number: "", name: "", note: "" });
-                  return;
-                }
-                setEditingId(null);
-                setForm({ number: "", name: "", note: "" });
-                setShowForm(true);
-              }}
-            >
-              {showForm && !editingId ? "Kapat" : "Ekle"}
-            </button>
+                  setShowForm(true);
+                }}
+              >
+                {showForm && !editingId ? "Kapat" : "Ekle"}
+              </button>
+            </div>
           </div>
           <label className="search">
             Arama
