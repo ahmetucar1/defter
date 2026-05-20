@@ -1950,51 +1950,53 @@ export default function BeekeeperLedger({
       setImporting(true);
       const buffer = await file.arrayBuffer();
       const workbook = XLSX.read(buffer, { type: "array" });
-      const sheetName = workbook.SheetNames[0];
-      if (!sheetName) {
+      const sheetRows = workbook.SheetNames.map((sheetName) => ({
+        sheetName,
+        rows: XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], {
+          header: 1,
+          blankrows: false
+        })
+      }));
+      const selectedSheet = sheetRows.find((item) => item.rows.length > 0);
+      if (!selectedSheet) {
         setImportError("Excel dosyası bulunamadı.");
         return;
       }
-      const sheet = workbook.Sheets[sheetName];
-      const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, blankrows: false });
+      const rows = selectedSheet.rows;
       if (!rows.length) {
         setImportError("Dosyada veri bulunamadı.");
         return;
       }
 
-      const firstRow = rows[0] || [];
-      const firstCell = String(firstRow[0] ?? "").trim().toLowerCase();
-      const secondCell = String(firstRow[1] ?? "").trim().toLowerCase();
-      const hasHeader =
-        (!Number(firstRow[0]) &&
-          (firstCell.includes("no") ||
-            firstCell.includes("numara") ||
-            firstCell.includes("id"))) ||
-        secondCell.includes("isim") ||
-        secondCell.includes("ad");
-
       const normalizeHeader = (value) => normalizeTextTr(value).replace(/\s+/g, "");
-      const headerCells = hasHeader ? firstRow.map(normalizeHeader) : [];
-      const numberColumnIndex = hasHeader
+      const isNumberHeader = (cell) =>
+        cell === "no" ||
+        cell.includes("numara") ||
+        cell.includes("aricino") ||
+        cell.includes("arıcıno") ||
+        cell.includes("id");
+      const isNameHeader = (cell) =>
+        cell.includes("isim") ||
+        cell.includes("adi") ||
+        cell.includes("adı") ||
+        cell.includes("adsoyad") ||
+        cell.includes("arici") ||
+        cell.includes("arıcı");
+      const headerIndex = rows.findIndex((row) => {
+        const cells = (row || []).map(normalizeHeader);
+        return cells.some(isNumberHeader) || cells.some(isNameHeader);
+      });
+      const headerCells = headerIndex >= 0 ? rows[headerIndex].map(normalizeHeader) : [];
+      const numberColumnIndex = headerIndex >= 0
         ? headerCells.findIndex(
             (cell) =>
-              cell === "no" ||
-              cell.includes("numara") ||
-              cell.includes("aricino") ||
-              cell.includes("arıcıno") ||
-              cell.includes("id")
+              isNumberHeader(cell) &&
+              !cell.includes("telefon") &&
+              !cell.includes("tel")
           )
         : -1;
-      const nameColumnIndex = hasHeader
-        ? headerCells.findIndex(
-            (cell) =>
-              cell.includes("isim") ||
-              cell.includes("adi") ||
-              cell.includes("adı") ||
-              cell.includes("adsoyad") ||
-              cell.includes("arici") ||
-              cell.includes("arıcı")
-          )
+      const nameColumnIndex = headerIndex >= 0
+        ? headerCells.findIndex(isNameHeader)
         : -1;
       const getNumberFromValue = (value) => {
         if (value == null || String(value).trim() === "") return Number.NaN;
@@ -2022,7 +2024,12 @@ export default function BeekeeperLedger({
           return Number.isNaN(numberValue) || /[a-zçğıöşü]/i.test(text);
         });
       };
-      const startIndex = hasHeader ? 1 : 0;
+      const startIndex = headerIndex >= 0 ? headerIndex + 1 : 0;
+      let nextAutoNumber =
+        beekeepers.reduce((max, beekeeper) => {
+          const numberValue = Number(beekeeper.number);
+          return Number.isFinite(numberValue) ? Math.max(max, numberValue) : max;
+        }, 0) + 1;
       const existingByNumber = new Map(
         beekeepers.map((beekeeper) => [String(beekeeper.number ?? ""), beekeeper])
       );
@@ -2033,6 +2040,7 @@ export default function BeekeeperLedger({
       const seenNames = new Set();
       const toInsert = [];
       const toUpdate = [];
+      let autoNumbered = 0;
       const skipped = { empty: 0, duplicate: 0, invalid: 0 };
 
       for (let i = startIndex; i < rows.length; i += 1) {
@@ -2041,11 +2049,16 @@ export default function BeekeeperLedger({
         const resolvedNameIndex = findNameIndex(row, resolvedNumberIndex);
         const numberRaw = row[resolvedNumberIndex];
         const nameRaw = row[resolvedNameIndex];
-        if (numberRaw == null || nameRaw == null || String(nameRaw).trim() === "") {
+        if (nameRaw == null || String(nameRaw).trim() === "") {
           skipped.empty += 1;
           continue;
         }
-        const numberValue = getNumberFromValue(numberRaw);
+        let numberValue = getNumberFromValue(numberRaw);
+        if (!Number.isFinite(numberValue) && resolvedNameIndex >= 0) {
+          numberValue = nextAutoNumber;
+          nextAutoNumber += 1;
+          autoNumbered += 1;
+        }
         if (!Number.isFinite(numberValue) || numberValue <= 0) {
           skipped.invalid += 1;
           continue;
@@ -2126,6 +2139,7 @@ export default function BeekeeperLedger({
 
       setImportSummary(
         `${toInsert.length} kayıt eklendi, ${toUpdate.length} kayıt güncellendi. ` +
+          `${autoNumbered} kayda otomatik numara verildi. ` +
           `Atlanan: ${skipped.duplicate} mükerrer, ` +
           `${skipped.invalid} hatalı, ${skipped.empty} boş.`
       );
