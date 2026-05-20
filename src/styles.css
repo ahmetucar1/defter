@@ -540,6 +540,16 @@ button.shipment-name-link {
   position: relative;
 }
 
+.entry-panel .entry-wax-box {
+  border: 1px solid #f1c40f;
+  border-radius: 12px;
+  padding: 10px 12px;
+  display: grid;
+  gap: 12px;
+  position: relative;
+  z-index: 1;
+}
+
 .entry-panel .entry-list::before,
 .entry-panel .entry-list::after {
   content: "";

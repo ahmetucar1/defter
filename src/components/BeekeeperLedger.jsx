@@ -394,8 +394,8 @@ function BeekeeperBook({ db, beekeeper, onBack, onOpenShipment }) {
   const [error, setError] = useState("");
   const [showLeftForm, setShowLeftForm] = useState(false);
   const [showRightForm, setShowRightForm] = useState(false);
-  const [showHiddenLeft, setShowHiddenLeft] = useState(false);
-  const [showHiddenRight, setShowHiddenRight] = useState(false);
+  const [showHiddenLeft, setShowHiddenLeft] = useState(true);
+  const [showHiddenRight, setShowHiddenRight] = useState(true);
   const [draggingEntry, setDraggingEntry] = useState(null);
   const [barcodeInput, setBarcodeInput] = useState("");
   const [pendingBarcode, setPendingBarcode] = useState("");
@@ -541,6 +541,31 @@ function BeekeeperBook({ db, beekeeper, onBack, onOpenShipment }) {
         : sortedLeftEntries.filter((entry) => !entry.hidden),
     [sortedLeftEntries, showHiddenLeft]
   );
+
+  const { leftNonWaxEntries, leftWaxEntries } = useMemo(() => {
+    const waxEntries = [];
+    const nonWaxEntries = [];
+    visibleLeftEntries.forEach((entry) => {
+      const rawType = normalizeTextTr(entry.itemType || "");
+      let isWax = false;
+      if (rawType) {
+        isWax = rawType === "mum" || rawType === "bal mumu";
+      } else {
+        const description = normalizeTextTr(entry.description || "");
+        if (description === "bal mumu" || description.startsWith("bal mumu")) {
+          isWax = true;
+        } else if (description && !description.startsWith("bal")) {
+          isWax = true;
+        }
+      }
+      if (isWax) {
+        waxEntries.push(entry);
+      } else {
+        nonWaxEntries.push(entry);
+      }
+    });
+    return { leftNonWaxEntries: nonWaxEntries, leftWaxEntries: waxEntries };
+  }, [visibleLeftEntries]);
 
   const visibleRightEntries = useMemo(
     () =>
@@ -1499,21 +1524,42 @@ function BeekeeperBook({ db, beekeeper, onBack, onOpenShipment }) {
             {visibleLeftEntries.length === 0 ? (
               <p className="muted">Henüz kayıt yok.</p>
             ) : (
-              visibleLeftEntries.map((entry) => (
-                <LeftEntryLine
-                  key={entry.id}
-                  entry={entry}
-                  onEdit={startLeftEdit}
-                  onDelete={handleLeftDelete}
-                  onToggleHidden={toggleEntryHidden}
-                  onDragStart={handleDragStart("left", entry)}
-                  onDragOver={handleDragOver}
-                  onDrop={handleDrop("left", entry)}
-                  onDragEnd={handleDragEnd}
-                  isDragging={draggingEntry?.id === entry.id}
-                  onOpenShipment={handleOpenShipment}
-                />
-              ))
+              <>
+                {leftNonWaxEntries.map((entry) => (
+                  <LeftEntryLine
+                    key={entry.id}
+                    entry={entry}
+                    onEdit={startLeftEdit}
+                    onDelete={handleLeftDelete}
+                    onToggleHidden={toggleEntryHidden}
+                    onDragStart={handleDragStart("left", entry)}
+                    onDragOver={handleDragOver}
+                    onDrop={handleDrop("left", entry)}
+                    onDragEnd={handleDragEnd}
+                    isDragging={draggingEntry?.id === entry.id}
+                    onOpenShipment={handleOpenShipment}
+                  />
+                ))}
+                {leftWaxEntries.length > 0 ? (
+                  <div className="entry-wax-box">
+                    {leftWaxEntries.map((entry) => (
+                      <LeftEntryLine
+                        key={entry.id}
+                        entry={entry}
+                        onEdit={startLeftEdit}
+                        onDelete={handleLeftDelete}
+                        onToggleHidden={toggleEntryHidden}
+                        onDragStart={handleDragStart("left", entry)}
+                        onDragOver={handleDragOver}
+                        onDrop={handleDrop("left", entry)}
+                        onDragEnd={handleDragEnd}
+                        isDragging={draggingEntry?.id === entry.id}
+                        onOpenShipment={handleOpenShipment}
+                      />
+                    ))}
+                  </div>
+                ) : null}
+              </>
             )}
           </div>
           <div className="total-bar">
@@ -1831,14 +1877,22 @@ export default function BeekeeperLedger({
 
   useEffect(() => {
     const q = query(collection(db, "beekeepers"));
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const rows = snapshot.docs.map((docItem) => ({
-        id: docItem.id,
-        ...docItem.data()
-      }));
-      rows.sort((a, b) => (a.number || 0) - (b.number || 0));
-      setBeekeepers(rows);
-    });
+    const unsubscribe = onSnapshot(
+      q,
+      (snapshot) => {
+        const rows = snapshot.docs.map((docItem) => ({
+          id: docItem.id,
+          ...docItem.data()
+        }));
+        rows.sort((a, b) => (a.number || 0) - (b.number || 0));
+        setBeekeepers(rows);
+        setError("");
+      },
+      (err) => {
+        console.error(err);
+        setError(firebaseErrorMessage(err, "Arıcı listesi okunamadı."));
+      }
+    );
 
     return () => unsubscribe();
   }, [db]);
@@ -1920,14 +1974,16 @@ export default function BeekeeperLedger({
         secondCell.includes("ad");
 
       const startIndex = hasHeader ? 1 : 0;
-      const existingNumbers = new Set(
-        beekeepers.map((beekeeper) => String(beekeeper.number ?? ""))
+      const existingByNumber = new Map(
+        beekeepers.map((beekeeper) => [String(beekeeper.number ?? ""), beekeeper])
       );
-      const existingNames = new Set(
-        beekeepers.map((beekeeper) => normalizeTextTr(beekeeper.name))
+      const existingByName = new Map(
+        beekeepers.map((beekeeper) => [normalizeTextTr(beekeeper.name), beekeeper])
       );
       const seenNumbers = new Set();
+      const seenNames = new Set();
       const toInsert = [];
+      const toUpdate = [];
       const skipped = { empty: 0, duplicate: 0, invalid: 0 };
 
       for (let i = startIndex; i < rows.length; i += 1) {
@@ -1950,33 +2006,57 @@ export default function BeekeeperLedger({
         const normalizedName = toTitleCaseTr(String(nameRaw));
         const nameKey = normalizeTextTr(normalizedName);
         const numberKey = String(numberValue);
-        if (
-          existingNumbers.has(numberKey) ||
-          existingNames.has(nameKey) ||
-          seenNumbers.has(numberKey)
-        ) {
+        if (seenNumbers.has(numberKey) || seenNames.has(nameKey)) {
           skipped.duplicate += 1;
           continue;
         }
         seenNumbers.add(numberKey);
-        toInsert.push({
+        seenNames.add(nameKey);
+
+        const existing = existingByNumber.get(numberKey) || existingByName.get(nameKey);
+        const item = {
           number: numberValue,
           name: normalizedName
-        });
+        };
+        if (existing) {
+          toUpdate.push({ ...item, id: existing.id });
+        } else {
+          toInsert.push(item);
+        }
       }
 
-      if (toInsert.length === 0) {
-        setImportSummary("Eklenecek kayıt bulunamadı.");
+      const totalChanges = toInsert.length + toUpdate.length;
+      if (totalChanges === 0) {
+        setImportSummary("Aktarılacak kayıt bulunamadı.");
         return;
       }
 
       const confirmed = window.confirm(
-        `${toInsert.length} kayıt eklenecek. Devam edilsin mi?`
+        `${toInsert.length} yeni kayıt eklenecek, ${toUpdate.length} kayıt güncellenecek. Devam edilsin mi?`
       );
       if (!confirmed) return;
 
       let batch = writeBatch(db);
       let count = 0;
+      for (const item of toUpdate) {
+        const ref = doc(db, "beekeepers", item.id);
+        batch.set(
+          ref,
+          {
+            number: Number(item.number),
+            name: item.name,
+            active: true,
+            updatedAt: serverTimestamp()
+          },
+          { merge: true }
+        );
+        count += 1;
+        if (count >= 450) {
+          await batch.commit();
+          batch = writeBatch(db);
+          count = 0;
+        }
+      }
       for (const item of toInsert) {
         const ref = doc(collection(db, "beekeepers"));
         batch.set(ref, {
@@ -1998,7 +2078,7 @@ export default function BeekeeperLedger({
       }
 
       setImportSummary(
-        `${toInsert.length} kayıt eklendi. ` +
+        `${toInsert.length} kayıt eklendi, ${toUpdate.length} kayıt güncellendi. ` +
           `Atlanan: ${skipped.duplicate} mükerrer, ` +
           `${skipped.invalid} hatalı, ${skipped.empty} boş.`
       );
