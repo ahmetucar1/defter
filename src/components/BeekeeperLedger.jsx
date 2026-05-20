@@ -1973,6 +1973,55 @@ export default function BeekeeperLedger({
         secondCell.includes("isim") ||
         secondCell.includes("ad");
 
+      const normalizeHeader = (value) => normalizeTextTr(value).replace(/\s+/g, "");
+      const headerCells = hasHeader ? firstRow.map(normalizeHeader) : [];
+      const numberColumnIndex = hasHeader
+        ? headerCells.findIndex(
+            (cell) =>
+              cell === "no" ||
+              cell.includes("numara") ||
+              cell.includes("aricino") ||
+              cell.includes("arıcıno") ||
+              cell.includes("id")
+          )
+        : -1;
+      const nameColumnIndex = hasHeader
+        ? headerCells.findIndex(
+            (cell) =>
+              cell.includes("isim") ||
+              cell.includes("adi") ||
+              cell.includes("adı") ||
+              cell.includes("adsoyad") ||
+              cell.includes("arici") ||
+              cell.includes("arıcı")
+          )
+        : -1;
+      const getNumberFromValue = (value) => {
+        if (value == null || String(value).trim() === "") return Number.NaN;
+        let numberValue = Number(value);
+        if (Number.isNaN(numberValue)) {
+          const digits = String(value).match(/\d+/g)?.join("");
+          numberValue = digits ? Number(digits) : Number.NaN;
+        }
+        return numberValue;
+      };
+      const findNumberIndex = (row) => {
+        if (numberColumnIndex >= 0) return numberColumnIndex;
+        return row.findIndex((cell) => {
+          const numberValue = getNumberFromValue(cell);
+          return Number.isFinite(numberValue) && numberValue > 0;
+        });
+      };
+      const findNameIndex = (row, resolvedNumberIndex) => {
+        if (nameColumnIndex >= 0) return nameColumnIndex;
+        return row.findIndex((cell, index) => {
+          if (index === resolvedNumberIndex || cell == null) return false;
+          const text = String(cell).trim();
+          if (!text) return false;
+          const numberValue = getNumberFromValue(text);
+          return Number.isNaN(numberValue) || /[a-zçğıöşü]/i.test(text);
+        });
+      };
       const startIndex = hasHeader ? 1 : 0;
       const existingByNumber = new Map(
         beekeepers.map((beekeeper) => [String(beekeeper.number ?? ""), beekeeper])
@@ -1988,17 +2037,15 @@ export default function BeekeeperLedger({
 
       for (let i = startIndex; i < rows.length; i += 1) {
         const row = rows[i] || [];
-        const numberRaw = row[0];
-        const nameRaw = row[1];
+        const resolvedNumberIndex = findNumberIndex(row);
+        const resolvedNameIndex = findNameIndex(row, resolvedNumberIndex);
+        const numberRaw = row[resolvedNumberIndex];
+        const nameRaw = row[resolvedNameIndex];
         if (numberRaw == null || nameRaw == null || String(nameRaw).trim() === "") {
           skipped.empty += 1;
           continue;
         }
-        let numberValue = Number(numberRaw);
-        if (Number.isNaN(numberValue)) {
-          const digits = String(numberRaw).match(/\d+/g)?.join("");
-          numberValue = digits ? Number(digits) : Number.NaN;
-        }
+        const numberValue = getNumberFromValue(numberRaw);
         if (!Number.isFinite(numberValue) || numberValue <= 0) {
           skipped.invalid += 1;
           continue;
